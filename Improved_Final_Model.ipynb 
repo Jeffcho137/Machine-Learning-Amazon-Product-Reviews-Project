@@ -1,0 +1,972 @@
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 184,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Jeffrey Cho Group 7 EXTRA CREDIT\n",
+    "# EXTRA CREDIT PARTS MARKED WITH EXTRA CREDIT or NEW "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 185,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import pandas as pd\n",
+    "import numpy as np\n",
+    "import sklearn\n",
+    "import nltk"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 186,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "pd.options.mode.chained_assignment = None\n",
+    "\n",
+    "from sklearn.feature_extraction.text import TfidfVectorizer"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 187,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "## PREPROCESSING HELPER FUNCTIONS:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 188,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# uses VADER's SentimentIntensityAnalyzer to add a four dimensional sentiment score to each review\n",
+    "def addVaderFeatures(panda, unprocessed_text, columnSuffix):\n",
+    "    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer\n",
+    "    analyzer = SentimentIntensityAnalyzer()\n",
+    "    panda['compound' + columnSuffix] = [analyzer.polarity_scores(str(x))['compound'] for x in unprocessed_text]\n",
+    "    panda['neg' + columnSuffix] = [analyzer.polarity_scores(str(x))['neg'] for x in unprocessed_text]\n",
+    "    panda['neu' + columnSuffix] = [analyzer.polarity_scores(str(x))['neu'] for x in unprocessed_text]\n",
+    "    panda['pos' + columnSuffix] = [analyzer.polarity_scores(str(x))['pos'] for x in unprocessed_text]\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 189,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "# Generate csv file with appropriate data for models\n",
+    "# creates a csv with features on a review basis for the training or testing data\n",
+    "def createProcessedFile(isTraining):\n",
+    "    SUMMARY_SUFFIX = \"Summary\"\n",
+    "    TEXT_SUFFIX = \"Text\"\n",
+    "    fileChoice = \"test\"\n",
+    "    if isTraining:\n",
+    "        fileChoice = \"training\"\n",
+    "\n",
+    "    pd.options.mode.chained_assignment = None\n",
+    "    # load data set\n",
+    "    inputFile = pd.read_json('Grocery_and_Gourmet_Food_Reviews_%s.json' % fileChoice, lines=True)\n",
+    "    print('Input File uploaded')\n",
+    "    # create new panda with only each productID\n",
+    "    processedReviews = pd.DataFrame({'ProductID': inputFile['asin']})\n",
+    "    # drop duplicate rows with the same ProductID\n",
+    "    processedReviews.drop_duplicates(subset=['ProductID'], keep='first', inplace=True)\n",
+    "\n",
+    "    # get sentiment score for each review's summary and reviewText\n",
+    "    addVaderFeatures(inputFile, inputFile['summary'], SUMMARY_SUFFIX)\n",
+    "    addVaderFeatures(inputFile, inputFile['reviewText'], TEXT_SUFFIX)\n",
+    "    print('Vader features added')\n",
+    "\n",
+    "    # keep count to print completeness\n",
+    "    count = 0\n",
+    "    onePer = int(len(processedReviews) / 100)\n",
+    "\n",
+    "    # loop over each product ID to generate final CSV\n",
+    "    for value in processedReviews['ProductID']:\n",
+    "        count += 1\n",
+    "        # print percent completeness\n",
+    "        if onePer != 0 and count % onePer == 0:\n",
+    "            print(str(count / onePer) + \"%\")\n",
+    "        # strings with all of the reviews/summaries for the same product combined\n",
+    "        reviewList = \"\"\n",
+    "        summList = \"\"\n",
+    "        # get panda with all of the rows with the same productID\n",
+    "        sameID = inputFile.loc[inputFile['asin'] == value]\n",
+    "        try:\n",
+    "            # combine all of the reviews for the same product into one long string\n",
+    "            processedReviews.loc[(processedReviews['ProductID'] == value), \"Reviews\"] = \" \".join(\n",
+    "                sameID['reviewText'].tolist())\n",
+    "\n",
+    "        except TypeError:\n",
+    "            for review in sameID['reviewText']:\n",
+    "                reviewList += \" \" + str(review)\n",
+    "\n",
+    "            processedReviews.loc[(processedReviews['ProductID'] == value), \"Reviews\"] = reviewList\n",
+    "\n",
+    "        try:\n",
+    "            # combine all of the summaries for the same product into one long string\n",
+    "            processedReviews.loc[(processedReviews['ProductID'] == value), \"Summaries\"] = \" \".join(\n",
+    "                sameID['summary'].tolist())\n",
+    "\n",
+    "        except TypeError:\n",
+    "            for summary in sameID['summary']:\n",
+    "                summList += \" \" + str(summary)\n",
+    "\n",
+    "            processedReviews.loc[(processedReviews['ProductID'] == value), \"Summaries\"] = summList\n",
+    "\n",
+    "        # only include 'Awesome?' column if using training data\n",
+    "        if isTraining:\n",
+    "            # check if product is awesome, create y column of 1's and 0's\n",
+    "            meanScore = sameID['overall'].mean()\n",
+    "            if meanScore > 4.4:\n",
+    "                product_class = 1\n",
+    "            else:\n",
+    "                product_class = 0\n",
+    "            processedReviews.loc[(processedReviews['ProductID'] == value), \"Awesome?\"] = product_class\n",
+    "\n",
+    "        processedReviews.loc[(processedReviews['ProductID'] == value), \"Number of Reviews\"] = sameID.shape[0]\n",
+    "        processedReviews.loc[(processedReviews['ProductID'] == value), \"Proportion of Verified Reviewers\"] = sameID[\n",
+    "                                                                                                                 'verified'].sum() / \\\n",
+    "                                                                                                             sameID.shape[\n",
+    "                                                                                                                 0]\n",
+    "\n",
+    "        # add 25th, 50th, and 75th percentile of each sentiment score generated by vader\n",
+    "        suff = [SUMMARY_SUFFIX, TEXT_SUFFIX]\n",
+    "        for s in suff:\n",
+    "            processedReviews.loc[(processedReviews['ProductID'] == value), \"compound25\" + s] = sameID[\n",
+    "                'compound' + s].quantile(.25)\n",
+    "            processedReviews.loc[(processedReviews['ProductID'] == value), \"compound50\" + s] = sameID[\n",
+    "                'compound' + s].quantile(.50)\n",
+    "            processedReviews.loc[(processedReviews['ProductID'] == value), \"compound75\" + s] = sameID[\n",
+    "                'compound' + s].quantile(.75)\n",
+    "            processedReviews.loc[(processedReviews['ProductID'] == value), \"neg25\" + s] = sameID['neg' + s].quantile(\n",
+    "                .25)\n",
+    "            processedReviews.loc[(processedReviews['ProductID'] == value), \"neg50\" + s] = sameID['neg' + s].quantile(\n",
+    "                .50)\n",
+    "            processedReviews.loc[(processedReviews['ProductID'] == value), \"neg75\" + s] = sameID['neg' + s].quantile(\n",
+    "                .75)\n",
+    "            processedReviews.loc[(processedReviews['ProductID'] == value), \"neu25\" + s] = sameID['neu' + s].quantile(\n",
+    "                .25)\n",
+    "            processedReviews.loc[(processedReviews['ProductID'] == value), \"neu50\" + s] = sameID['neu' + s].quantile(\n",
+    "                .50)\n",
+    "            processedReviews.loc[(processedReviews['ProductID'] == value), \"neu75\" + s] = sameID['neu' + s].quantile(\n",
+    "                .75)\n",
+    "            processedReviews.loc[(processedReviews['ProductID'] == value), \"pos25\" + s] = sameID['pos' + s].quantile(\n",
+    "                .25)\n",
+    "            processedReviews.loc[(processedReviews['ProductID'] == value), \"pos50\" + s] = sameID['pos' + s].quantile(\n",
+    "                .50)\n",
+    "            processedReviews.loc[(processedReviews['ProductID'] == value), \"pos75\" + s] = sameID['pos' + s].quantile(\n",
+    "                .75)\n",
+    "\n",
+    "    # write to CSV\n",
+    "    fileChoice = 'T' + fileChoice[1:]\n",
+    "    processedReviews.to_csv('Groceries_Processed_%s_Data.csv' % fileChoice)\n",
+    "    print(\"Wrote to CSV\")\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 190,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# stems and tokenizes a string using the open source NLTK library\n",
+    "# supports the TFIDF vectorizer, helping with bag of words creation\n",
+    "def tokenize(text):\n",
+    "    from nltk.stem.porter import PorterStemmer\n",
+    "    tokens = nltk.word_tokenize(text)\n",
+    "    stems = []\n",
+    "    for item in tokens:\n",
+    "        stems.append(PorterStemmer().stem(item))\n",
+    "    return stems\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 191,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# returns a sci_kit learn TFIDF vectorizer to convert text to TFIDF bag of words\n",
+    "def get_vectorizer(column, X, ngram_range, tokenizer = False):\n",
+    "    if tokenizer:\n",
+    "        vectorizer = TfidfVectorizer(max_features=4000, stop_words='english', ngram_range=ngram_range, tokenizer=tokenize)\n",
+    "    else:\n",
+    "        vectorizer = TfidfVectorizer(max_features=4000, ngram_range=ngram_range)\n",
+    "    vectorizer.fit(X[column].apply(lambda x: np.str_(x)))\n",
+    "    return vectorizer\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 192,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "# returns bag of words for a Panda column of text entries\n",
+    "def process_TFIDF_bow(vectorizer, unprocessed_column):\n",
+    "    result = vectorizer.transform(unprocessed_column.apply(lambda x: np.str_(x)))\n",
+    "    return result.toarray()\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 193,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "## INNER MODELS HELPER FUNCTIONS\n",
+    "# Our approach works by training a bunch of models on an inner training set\n",
+    "# Then we use the predicted probabilities of Awesome for those models as features in our final model\n",
+    "\n",
+    "# returns a trained RandomForest model, not hyperparameter-optimized\n",
+    "def get_trained_RandomForest(training_X, training_Y):\n",
+    "    from sklearn.ensemble import RandomForestClassifier\n",
+    "    model = RandomForestClassifier(n_estimators=100, random_state=3)\n",
+    "    model.fit(training_X, training_Y)\n",
+    "    return model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 194,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# returns the hyperparameter-optimized random forest model for review bodies\n",
+    "def get_trained_RandomForest_bodies(training_X, training_Y):\n",
+    "    from sklearn.ensemble import RandomForestClassifier\n",
+    "    model = RandomForestClassifier(random_state=3, bootstrap=False, max_depth=50, max_features='auto', min_samples_leaf=1,\n",
+    "                                   min_samples_split=2, n_estimators=500)\n",
+    "    model.fit(training_X, training_Y)\n",
+    "    return model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 195,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# returns the hyperparameter-optimized randomforest model for the summaries\n",
+    "def get_trained_RandomForest_summaries(training_X, training_Y):\n",
+    "    from sklearn.ensemble import RandomForestClassifier\n",
+    "    model = RandomForestClassifier(random_state=3, bootstrap=True, max_depth=None, max_features='auto',\n",
+    "                                   min_samples_leaf=2, min_samples_split=10, n_estimators=100)\n",
+    "    model.fit(training_X, training_Y)\n",
+    "    return model\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 196,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# hyperparameter optimization for RandomForest bodies, used to find the parameters for the two functions above\n",
+    "def get_RandomForest_optimized_parameters(training_X, training_Y):\n",
+    "    from sklearn.ensemble import RandomForestClassifier\n",
+    "    from sklearn.model_selection import GridSearchCV\n",
+    "    model = GridSearchCV(RandomForestClassifier(random_state=3), param_grid={\n",
+    "        'n_estimators': (100, 200, 500),\n",
+    "        'max_features': ['auto', 'sqrt', 'log2'],\n",
+    "        'bootstrap': [True, False],\n",
+    "        'max_depth': [None, 5, 10, 50, 100],\n",
+    "        'min_samples_split': (2, 5, 10),\n",
+    "        'min_samples_leaf': (1, 2, 5, 10)\n",
+    "    }, n_jobs=-1)\n",
+    "    model.fit(training_X, training_Y)\n",
+    "    print(\"Best parameters for RF bodies model: \")\n",
+    "    print(str(model.best_params_) + \"\\n\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 197,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# hyperparameter optimization for AdaBoost model\n",
+    "# hyperparameters found to work best are used\n",
+    "# in get_trained_AdaBoost_bodies and get_trained_AdaBoost_summaries\n",
+    "def get_AdaBoost_optimized_parameters(training_X, training_Y):\n",
+    "    from sklearn.ensemble import AdaBoostClassifier\n",
+    "    from sklearn.model_selection import GridSearchCV\n",
+    "    model = GridSearchCV(AdaBoostClassifier(random_state=3), param_grid={\n",
+    "        'n_estimators': (50, 100, 200),\n",
+    "        'learning_rate': (0.1, 0.5, 1)\n",
+    "    })\n",
+    "    model.fit(training_X, training_Y)\n",
+    "    print(\"Best parameters for Adaboost summaries model: \")\n",
+    "    print(str(model.best_params_) + \"\\n\")\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 198,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# returns a trained AdaBoost model\n",
+    "def get_trained_AdaBoost(training_X, training_Y):\n",
+    "    from sklearn.ensemble import AdaBoostClassifier\n",
+    "    model = AdaBoostClassifier(n_estimators=100, random_state=3)\n",
+    "    model.fit(training_X, training_Y)\n",
+    "    return model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 199,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# returns a trained AdaBoost model, optimized with the best hyperparameters found for bodies\n",
+    "def get_trained_AdaBoost_bodies(training_X, training_Y):\n",
+    "    from sklearn.ensemble import AdaBoostClassifier\n",
+    "    model = AdaBoostClassifier(random_state=3, learning_rate=0.1, n_estimators=200)\n",
+    "    model.fit(training_X, training_Y)\n",
+    "    return model\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 200,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# optimized with the best hyperparameters found for summaries\n",
+    "def get_trained_AdaBoost_summaries(training_X, training_Y):\n",
+    "    from sklearn.ensemble import AdaBoostClassifier\n",
+    "    model = AdaBoostClassifier(random_state=3, learning_rate=0.5, n_estimators=50)\n",
+    "    model.fit(training_X, training_Y)\n",
+    "    return model\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 201,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "# returns a trained Multinomial Naive Bayes model\n",
+    "def get_trained_MultinomialNB(training_X, training_Y):\n",
+    "    from sklearn.naive_bayes import MultinomialNB\n",
+    "    model = MultinomialNB()\n",
+    "    model.fit(training_X, training_Y)\n",
+    "    return model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 202,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# EXTRA CREDIT\n",
+    "# NEW\n",
+    "\n",
+    "# returns a trained Neural Network Multi-Layer Perception model\n",
+    "def get_trained_MLP(training_X, training_Y):\n",
+    "    from sklearn.neural_network import MLPClassifier\n",
+    "    model = MLPClassifier(random_state=1, max_iter=300).fit(training_X, training_Y)\n",
+    "    return model\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 203,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# EXTRA CREDIT\n",
+    "# NEW\n",
+    "\n",
+    "# returns a trained logarithmic regresssion model\n",
+    "def get_trained_log_reg(training_X, training_Y):\n",
+    "    from sklearn.linear_model import LogisticRegression\n",
+    "    model = LogisticRegression(random_state=0).fit(training_X, training_Y)\n",
+    "    return model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 204,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# returns a trained Gradient Boosting Classifier Model\n",
+    "def get_trained_GBC(training_X, training_Y):\n",
+    "    from sklearn.ensemble import GradientBoostingClassifier\n",
+    "    model = GradientBoostingClassifier(n_estimators=100, random_state=3)\n",
+    "    model.fit(training_X, training_Y)\n",
+    "    return model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 205,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# returns a trained Gradient Boosting Classifier Model with optimized hyperparameters for the bodies\n",
+    "def get_trained_GBC_bodies(training_X, training_Y):\n",
+    "    from sklearn.ensemble import GradientBoostingClassifier\n",
+    "    model = GradientBoostingClassifier(random_state=3, learning_rate=0.1, min_samples_split=2, n_estimators=500)\n",
+    "    model.fit(training_X, training_Y)\n",
+    "    return model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 206,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# returns a trained GBC model with optimized hyperparameters for the summaries\n",
+    "def get_trained_GBC_summaries(training_X, training_Y):\n",
+    "    from sklearn.ensemble import GradientBoostingClassifier\n",
+    "    model = GradientBoostingClassifier(random_state=3, learning_rate=0.1, min_samples_split=10, n_estimators=200)\n",
+    "    model.fit(training_X, training_Y)\n",
+    "    return model\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 207,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# hyperparameter optimization for GBC summaries\n",
+    "def get_GBC_optimized_parameters(training_X, training_Y):\n",
+    "    from sklearn.ensemble import GradientBoostingClassifier\n",
+    "    from sklearn.model_selection import GridSearchCV\n",
+    "    model = GridSearchCV(GradientBoostingClassifier(random_state=3), param_grid={\n",
+    "            'learning_rate': (0.1, 0.2, 0.5),\n",
+    "            'n_estimators': (100, 200, 500),\n",
+    "            'min_samples_split': (2, 5, 10)\n",
+    "        })\n",
+    "    model.fit(training_X, training_Y)\n",
+    "    print(\"Best parameters for GBC summaries model: \")\n",
+    "    print(str(model.best_params_) + \"\\n\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 208,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# prints the metrics for a model's performance on a test set\n",
+    "def test_model(model, testX, testY):\n",
+    "    from sklearn.metrics import classification_report\n",
+    "    predictions = model.predict_proba(testX)[:, 1]\n",
+    "    print(classification_report(np.round(predictions), testY))\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 209,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "## FINAL SVM HELPER FUNCTIONS"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 210,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "# get_SVM_features combines all of the features for the final SVM into a panda\n",
+    "# takes:\n",
+    "# a dictionary of models\n",
+    "# TFIDF bag of words features for the review summaries\n",
+    "# TFIDF bag of words features for the review bodies,\n",
+    "# the Vader quantile Scores for each product\n",
+    "# returns a panda of all of the features for the final SVM\n",
+    "def get_SVM_features(models, processed_summaries, processed_bodies, vader_scores):\n",
+    "    result = pd.DataFrame()\n",
+    "    # for each model\n",
+    "    for model_name in models.keys():\n",
+    "        # if the model is on the review bodies\n",
+    "        if model_name[-6:] == \"bodies\":\n",
+    "            # make predictions on the body features\n",
+    "            result[model_name] = models[model_name].predict_proba(processed_bodies)[:, 1]\n",
+    "        # else if the model is on the summaries\n",
+    "        else:\n",
+    "            # make predictions on the summary features\n",
+    "            result[model_name] = models[model_name].predict_proba(processed_summaries)[:, 1]\n",
+    "\n",
+    "    vader_score_col_names = ['compound25', 'compound50', 'compound75', 'pos25', 'pos50', 'pos75', 'neg25', 'neg50', 'neg75', 'neu25', 'neu50', 'neu75']\n",
+    "    # add the vader scores\n",
+    "    for name in vader_score_col_names:\n",
+    "        # one of each for the summaries and the reviewtexts\n",
+    "        temp = name + 'Text'\n",
+    "        result[temp] = vader_scores[temp].values\n",
+    "        temp = name + 'Summary'\n",
+    "        result[temp] = vader_scores[temp].values\n",
+    "    return result"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 211,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# returns trained SVM model\n",
+    "def get_trained_SVM(processed_SVM_training_features, y_train):\n",
+    "    from sklearn import svm\n",
+    "    model = svm.SVC(kernel = 'rbf')\n",
+    "    model.fit(processed_SVM_training_features, y_train)\n",
+    "    return model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 212,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "# hyperparameter optimization for SVM\n",
+    "def optimized_SVM_parameters(processed_SVM_training_features, y_train):\n",
+    "    from sklearn import svm\n",
+    "    from sklearn.model_selection import GridSearchCV\n",
+    "    model = GridSearchCV(svm.SVC(), param_grid={\n",
+    "        'C': (0.1, 1, 2),\n",
+    "        'kernel': ['poly', 'rbf'],\n",
+    "        'shrinking': [True, False]\n",
+    "    })\n",
+    "    model.fit(processed_SVM_training_features, y_train)\n",
+    "    print(\"Best parameters for SVC model: \")\n",
+    "    print(str(model.best_params_))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 213,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "## TESTING HELPER FUNCTIONS\n",
+    "\n",
+    "# returns 10 f1s for each testing set after tenFold cross validation\n",
+    "def tenFoldCVgetF1(untrained_model, X, y):\n",
+    "    from sklearn.model_selection import cross_val_score\n",
+    "    return cross_val_score(untrained_model, X, y, scoring=\"f1\", cv = 10)\n",
+    "\n",
+    "# makes predictions for a whole feature set with 10 fold cv\n",
+    "def tenFoldCV_Predict(untrained_model, X, y):\n",
+    "    from sklearn.model_selection import cross_val_predict\n",
+    "    return cross_val_predict(untrained_model, X, y, cv=10)\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 168,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "#Running & Testing the Code"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 169,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "# create a processed csv file which has one row per product with the appropriate features\n",
+    "# for the training set\n",
+    "#createProcessedFile(True)\n",
+    "\n",
+    "# create the processed csv file with one row per product for the test set\n",
+    "#createProcessedFile(False)\n",
+    "\n",
+    "# read training data\n",
+    "training = pd.read_csv('Groceries_Processed_Training_Data_Vader.csv')\n",
+    "del training['Unnamed: 0']\n",
+    "\n",
+    "Y = training['Awesome?']\n",
+    "X = training[['ProductID', 'Reviews', 'Summaries', 'Number of Reviews', 'compound25Text', 'compound50Text', 'compound75Text', 'pos25Text', 'pos50Text', 'pos75Text', 'neg25Text', 'neg50Text', 'neg75Text', 'neu25Text', 'neu50Text', 'neu75Text', 'compound25Summary', 'compound50Summary', 'compound75Summary', 'pos25Summary', 'pos50Summary', 'pos75Summary', 'neg25Summary', 'neg50Summary', 'neg75Summary', 'neu25Summary', 'neu50Summary', 'neu75Summary']]\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 170,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# feature scaling\n",
+    "scale_factor = X['Number of Reviews'].max()\n",
+    "\n",
+    "X['Number of Reviews'] = X['Number of Reviews'] / scale_factor\n",
+    "\n",
+    "# create bag of words TF-IDF vectorizers for review bodies and summaries\n",
+    "# ngrams (1,2) was found to be best during hyperparam optimization for both the summaries and bodies\n",
+    "review_body_vectorizer = get_vectorizer('Reviews', X, (1, 2))\n",
+    "review_summary_vectorizer = get_vectorizer('Summaries', X, (1, 2))\n",
+    "\n",
+    "#  split X and y into test and test sets\n",
+    "from sklearn.model_selection import train_test_split\n",
+    "# two training sets, one to train the inner models, one to train the final SVM which takes the inner model results\n",
+    "# X inner train is used to train all of the inner models (RF, ADAboost, NB, GBC)\n",
+    "# X outer train is for the final SVM that takes the inner model predictions\n",
+    "X_inner_train, X_outer_train, y_inner_train, y_outer_train = train_test_split(X, Y, test_size=0.4)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 171,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# process the training and cross validation sets into bag of words format\n",
+    "\n",
+    "# process the TFIDF features to train the inner models (RF, NB, GBC, Adaboost)\n",
+    "processed_bodies_inner_train = process_TFIDF_bow(review_body_vectorizer, X_inner_train['Reviews'])\n",
+    "processed_summaries_inner_train = process_TFIDF_bow(review_summary_vectorizer, X_inner_train['Summaries'])\n",
+    "\n",
+    "#process the bag of word TFIDF features for the final SVM\n",
+    "processed_bodies_outer_train = process_TFIDF_bow(review_body_vectorizer, X_outer_train['Reviews'])\n",
+    "processed_summaries_outer_train = process_TFIDF_bow(review_summary_vectorizer, X_outer_train['Summaries'])\n",
+    "\n",
+    "print(\"done getting features\")\n",
+    "\n",
+    "# a dictionary of the inner models we have\n",
+    "# keys are the names of the models, values are the sklearn model classes\n",
+    "models = {}"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 173,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Starting MLP Neural Networks Classifier\n",
+      "MLP Finished\n"
+     ]
+    }
+   ],
+   "source": [
+    "# EXTRA CREDIT\n",
+    "## MLP Neural Network\n",
+    "\n",
+    "print(\"Starting MLP Neural Networks Classifier\")\n",
+    "\n",
+    "# create MLP model for summaries of each product\n",
+    "MLP_summaries = get_trained_MLP(processed_summaries_inner_train, y_inner_train)\n",
+    "# add the model to the dictionary of inner_models\n",
+    "models['MLPsummaries'] = MLP_summaries\n",
+    "\n",
+    "# create MLP model for bodies of each product\n",
+    "MLP_bodies = get_trained_MLP(processed_bodies_inner_train, y_inner_train)\n",
+    "# add the model to the dictionary of inner_models\n",
+    "models['MLPbodies'] = MLP_bodies\n",
+    "\n",
+    "print(\"MLP Finished\")\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 174,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Starting Random Forest Classifier\n",
+      "Random Forest Done\n"
+     ]
+    }
+   ],
+   "source": [
+    "## RANDOM FOREST\n",
+    "\n",
+    "print(\"Starting Random Forest Classifier\")\n",
+    "\n",
+    "# create RF model based on TFIDF bag of words for combined summaries of each product\n",
+    "RF_summaries = get_trained_RandomForest_summaries(processed_summaries_inner_train, y_inner_train)\n",
+    "# add the model to the dictionary of inner_models\n",
+    "models['RFsummaries'] = RF_summaries\n",
+    "\n",
+    "# create RF model based on bag of words for combined reviewTexts of each product\n",
+    "RF_bodies = get_trained_RandomForest_bodies(processed_bodies_inner_train, y_inner_train)\n",
+    "# add the model to the dictionary of inner_models\n",
+    "models['RFbodies'] = RF_bodies\n",
+    "\n",
+    "print(\"Random Forest Done\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 175,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Adaboost started\n",
+      "Adaboost Done\n"
+     ]
+    }
+   ],
+   "source": [
+    "## ADAboost Model\n",
+    "\n",
+    "print(\"Adaboost started\")\n",
+    "\n",
+    "# create ADAboost models for the bodies and summaries, add them to the models dictionary\n",
+    "ADA_bodies = get_trained_AdaBoost_bodies(processed_bodies_inner_train, y_inner_train)\n",
+    "models['ADAbodies'] = ADA_bodies\n",
+    "ADA_summaries = get_trained_AdaBoost_summaries(processed_summaries_inner_train, y_inner_train)\n",
+    "models['ADAsummaries'] = ADA_summaries\n",
+    "\n",
+    "print('Adaboost Done')\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 176,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Multinomial NB started\n",
+      "Multinomial NB Done\n"
+     ]
+    }
+   ],
+   "source": [
+    "## Create and Train Multinomial NaiveBayes Model\n",
+    "\n",
+    "print(\"Multinomial NB started\")\n",
+    "\n",
+    "# create the models and add them to the models dictionary\n",
+    "NB_summaries = get_trained_MultinomialNB(processed_summaries_inner_train, y_inner_train)\n",
+    "models['NBsummaries'] = NB_summaries\n",
+    "NB_bodies = get_trained_MultinomialNB(processed_bodies_inner_train, y_inner_train)\n",
+    "models['NBbodies'] = NB_bodies\n",
+    "\n",
+    "print(\"Multinomial NB Done\")\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 177,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Gradient Boosting Classifier started\n",
+      "finished summaries\n",
+      "Gradient Boosting Classifier Done\n"
+     ]
+    }
+   ],
+   "source": [
+    "## Create and train Gradient Boosting classifier model\n",
+    "\n",
+    "print(\"Gradient Boosting Classifier started\")\n",
+    "\n",
+    "GBC_summaries = get_trained_GBC_summaries(processed_summaries_inner_train, y_inner_train)\n",
+    "models[\"GB_summaries\"] = GBC_summaries\n",
+    "\n",
+    "print(\"finished summaries\")\n",
+    "\n",
+    "GBC_bodies = get_trained_GBC_bodies(processed_bodies_inner_train, y_inner_train)\n",
+    "models['GB_bodies'] = GBC_bodies\n",
+    "\n",
+    "print(\"Gradient Boosting Classifier Done\")\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 178,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Logarithmic Regression Classifier Model Started\n",
+      "finished summaries\n",
+      "Logarithmic Regression Classifier Model Done\n"
+     ]
+    }
+   ],
+   "source": [
+    "# EXTRA CREDIT\n",
+    "## Create and train log_Regression classifier model\n",
+    "\n",
+    "print(\"Logarithmic Regression Classifier Model Started\")\n",
+    "\n",
+    "log_reg_summaries = get_trained_log_reg(processed_summaries_inner_train, y_inner_train)\n",
+    "models[\"Log_Regression_Summaries\"] = log_reg_summaries\n",
+    "\n",
+    "print(\"finished summaries\")\n",
+    "\n",
+    "log_reg_bodies = get_trained_log_reg(processed_bodies_inner_train, y_inner_train)\n",
+    "models['Log_Regression_bodies'] = log_reg_bodies\n",
+    "\n",
+    "print(\"Logarithmic Regression Classifier Model Done\")\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 179,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "              precision    recall  f1-score   support\n",
+      "\n",
+      "         0.0       0.78      0.83      0.80      5398\n",
+      "         1.0       0.88      0.84      0.86      7825\n",
+      "\n",
+      "    accuracy                           0.84     13223\n",
+      "   macro avg       0.83      0.83      0.83     13223\n",
+      "weighted avg       0.84      0.84      0.84     13223\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "## Outer SVM\n",
+    "\n",
+    "from sklearn.metrics import classification_report\n",
+    "\n",
+    "#process training features\n",
+    "SVM_training_features = get_SVM_features(models, processed_summaries_outer_train, processed_bodies_outer_train, X_outer_train)\n",
+    "SVM_training_features[\"NumberReviews\"] = X_outer_train['Number of Reviews'].values\n",
+    "# SVM_training_features.to_csv(\"SVM_training_features_q3.csv\", index=False)\n",
+    "# y_outer_train.to_csv(\"SVM_train_Y_q3.csv\", index=False)\n",
+    "\n",
+    "from sklearn import svm\n",
+    "# check result metrics of 10 fold cv\n",
+    "cv_predictions = tenFoldCV_Predict(svm.SVC(kernel='rbf'), SVM_training_features, y_outer_train)\n",
+    "print(classification_report(cv_predictions, y_outer_train))\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 183,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# get model trained on all of training set to make predictions on unlabeled test set\n",
+    "final_SVM = get_trained_SVM(SVM_training_features, y_outer_train)\n",
+    "\n",
+    "# read in testing features (processed to a per product basis)\n",
+    "test = pd.read_csv('Groceries_Processed_Test_Data.csv')\n",
+    "\n",
+    "# feature scaling number of reviews\n",
+    "test['Number of Reviews'] = test['Number of Reviews']/scale_factor\n",
+    "del test['Unnamed: 0']\n",
+    "\n",
+    "# process bag of words\n",
+    "processed_test_bodies = process_TFIDF_bow(review_body_vectorizer, test['Reviews'])\n",
+    "processed_test_summaries = process_TFIDF_bow(review_summary_vectorizer, test['Summaries'])\n",
+    "\n",
+    "# get all final SVM features, add model predictions\n",
+    "SVM_testing_features = get_SVM_features(models, processed_test_summaries, processed_test_bodies, test)\n",
+    "SVM_testing_features['Number of Reviews'] = test['Number of Reviews'].values\n",
+    "\n",
+    "# get trained final SVM\n",
+    "final_SVM = get_trained_SVM(SVM_training_features, y_outer_train)\n",
+    "final_predictions = test[['ProductID']]\n",
+    "\n",
+    "# make predictions\n",
+    "final_predictions['Awesome?'] = final_SVM.predict(SVM_testing_features)\n",
+    "\n",
+    "# output to csv\n",
+    "final_predictions.to_csv('Extra_Credit_Outcomes.csv', index=False)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.8.3"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 4
+}
